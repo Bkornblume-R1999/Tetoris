@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>smth ig</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    min-height: 100dvh;
+    font-family: monospace;
+    padding: 12px;
+    gap: 12px;
+    overflow-x: hidden;
+  }
+
+  /* ── Top row: board + side panel ── */
+  .game-area {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    align-items: flex-start;
+    justify-content: center;
+  }
+
+  canvas { display: block; }
+
+  #tetris {
+    border: 3px solid #333;
+    flex-shrink: 0;
+  }
+
+  /* ── Side panel ── */
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .next-box {
+    border: 3px solid #222;
+    background: #161616;
+  }
+
+  /* Volume bars */
+  .vol-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .vol-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 32px;
+  }
+
+  .vol-bars .bar {
+    width: 4px;
+    background: #222;
+    border-radius: 1px;
+    transition: background 0.15s ease;
+  }
+
+  .vol-bars .bar.active {
+    background: #fff;
+  }
+
+  .vol-label {
+    font-size: 8px;
+    color: #444;
+  }
+
+  /* Audio + message */
+  .bottom-ui {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+  }
+
+  #msg {
+    font-size: 9px;
+    color: #444;
+    text-align: center;
+  }
+
+  .upload-btn {
+    font-family: monospace;
+    font-size: 9px;
+    padding: 3px 7px;
+    background: #161616;
+    border: 1px solid #222;
+    cursor: pointer;
+    color: #555;
+    white-space: nowrap;
+  }
+
+  .upload-btn:hover { background: #1e1e1e; color: #888; }
+
+  #audio-name {
+    font-size: 8px;
+    color: #333;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  /* ── Mobile touch controls ── */
+  .touch-controls {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .touch-row {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .touch-btn {
+    font-family: monospace;
+    font-size: 16px;
+    background: #161616;
+    border: 2px solid #2a2a2a;
+    color: #666;
+    border-radius: 4px;
+    cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* default size for directional buttons */
+    width: 64px;
+    height: 52px;
+  }
+
+  .touch-btn:active { background: #222; color: #aaa; }
+
+  .touch-btn.wide {
+    flex: 1;
+    width: auto;
+    font-size: 12px;
+    height: 44px;
+  }
+
+  /* Show touch controls on touch devices / small screens */
+  @media (hover: none), (max-width: 520px) {
+    .touch-controls { display: flex; }
+  }
+</style>
+</head>
+<body>
+
+<div class="game-area">
+  <canvas id="tetris"></canvas>
+
+  <div class="side">
+    <canvas id="next-0" class="next-box"></canvas>
+    <canvas id="next-1" class="next-box"></canvas>
+    <canvas id="next-2" class="next-box"></canvas>
+    <canvas id="next-3" class="next-box"></canvas>
+
+    <div class="vol-wrapper">
+      <div class="vol-bars" id="vol-bars"></div>
+      <div class="vol-label" id="vol-label">0 / 100</div>
+    </div>
+
+    <div class="bottom-ui">
+      <input type="file" accept="audio/*" id="audio-file" style="display:none">
+      <button class="upload-btn" onclick="document.getElementById('audio-file').click()">load audio</button>
+      <div id="audio-name"></div>
+      <div id="msg">space to start</div>
+    </div>
+  </div>
+</div>
+
+<!-- Touch controls (shown on mobile) -->
+<div class="touch-controls">
+  <div class="touch-row">
+    <button class="touch-btn wide" id="btn-start">start / pause</button>
+    <button class="touch-btn wide" id="btn-drop">hard drop</button>
+  </div>
+  <div class="touch-row">
+    <button class="touch-btn" id="btn-left">◀</button>
+    <button class="touch-btn" id="btn-rotate">↻</button>
+    <button class="touch-btn" id="btn-down">▼</button>
+    <button class="touch-btn" id="btn-right">▶</button>
+  </div>
+</div>
+
+<audio id="audio-player" loop></audio>
+
+<script>
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const COLS = 10;
+const ROWS = 20;
+const NUM_NEXT = 4;
+const DROP_INTERVAL = 500;
+const DAS_DELAY = 110;
+const DAS_REPEAT = 38;
+const VOL_BAR_COUNT = 16;
+
+const PIECE_COLORS = {
+  I: '#00cfcf', O: '#f0d000', T: '#b040e0',
+  S: '#30d060', Z: '#e03030', J: '#3060e0', L: '#f08020',
+};
+
+const PIECE_SHAPES = {
+  I: [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+  O: [[1,1],[1,1]],
+  T: [[0,1,0],[1,1,1],[0,0,0]],
+  S: [[0,1,1],[1,1,0],[0,0,0]],
+  Z: [[1,1,0],[0,1,1],[0,0,0]],
+  J: [[1,0,0],[1,1,1],[0,0,0]],
+  L: [[0,0,1],[1,1,1],[0,0,0]],
+};
+
+const PIECE_KEYS = Object.keys(PIECE_SHAPES);
+
+// ─── Responsive cell size ─────────────────────────────────────────────────────
+
+function calcCellSize() {
+  // On small screens, fit the board into ~60% of the viewport width
+  const maxBoardWidth = Math.min(window.innerWidth * 0.60, 220);
+  return Math.floor(maxBoardWidth / COLS);
+}
+
+let CELL_SIZE = calcCellSize();
+let NEXT_CELL_SIZE = Math.max(10, Math.floor(CELL_SIZE * 0.72));
+
+// ─── Canvas setup ────────────────────────────────────────────────────────────
+
+const boardCanvas = document.getElementById('tetris');
+const boardCtx = boardCanvas.getContext('2d');
+
+const nextCanvases = Array.from({ length: NUM_NEXT }, (_, i) =>
+  document.getElementById(`next-${i}`)
+);
+
+function resizeCanvases() {
+  CELL_SIZE = calcCellSize();
+  NEXT_CELL_SIZE = Math.max(10, Math.floor(CELL_SIZE * 0.72));
+
+  boardCanvas.width = COLS * CELL_SIZE;
+  boardCanvas.height = ROWS * CELL_SIZE;
+
+  nextCanvases.forEach(c => {
+    c.width = 4 * NEXT_CELL_SIZE;
+    c.height = 4 * NEXT_CELL_SIZE;
+  });
+
+  drawBoard();
+  if (queue.length) drawNextQueue();
+}
+
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+// ─── Volume bar UI ────────────────────────────────────────────────────────────
+
+const volBarsContainer = document.getElementById('vol-bars');
+const volBarEls = [];
+
+for (let i = 0; i < VOL_BAR_COUNT; i++) {
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const heightPx = 4 + Math.round((i / (VOL_BAR_COUNT - 1)) * 28);
+  bar.style.height = heightPx + 'px';
+  volBarsContainer.appendChild(bar);
+  volBarEls.push(bar);
+}
+
+// ─── Game state ───────────────────────────────────────────────────────────────
+
+let board = [];
+let queue = [];
+let currentPiece = null;
+let volume = 0;
+let isRunning = false;
+let isPaused = false;
+let dropAccumulator = 0;
+let lastTimestamp = 0;
+let holdingLeft = false;
+let holdingRight = false;
+let dasLeftTimer = 0;
+let dasRightTimer = 0;
+
+// ─── Board helpers ────────────────────────────────────────────────────────────
+
+function createEmptyBoard() {
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+}
+
+function isValidPosition(shape, originX, originY) {
+  for (let row = 0; row < shape.length; row++) {
+    for (let col = 0; col < shape[row].length; col++) {
+      if (!shape[row][col]) continue;
+      const bx = originX + col;
+      const by = originY + row;
+      if (bx < 0 || bx >= COLS || by >= ROWS) return false;
+      if (by >= 0 && board[by][bx] !== null) return false;
+    }
+  }
+  return true;
+}
+
+function rotatePiece(shape) {
+  const size = shape.length;
+  return shape[0].map((_, col) => shape.map((_, row) => shape[size - 1 - row][col]));
+}
+
+// ─── Piece helpers ────────────────────────────────────────────────────────────
+
+function createPiece() {
+  const key = PIECE_KEYS[Math.floor(Math.random() * PIECE_KEYS.length)];
+  const shape = PIECE_SHAPES[key].map(row => [...row]);
+  const startX = Math.floor(COLS / 2) - Math.floor(shape[0].length / 2);
+  return { key, shape, color: PIECE_COLORS[key], x: startX, y: 0 };
+}
+
+function initQueue() {
+  queue = Array.from({ length: NUM_NEXT }, () => createPiece());
+}
+
+function dequeueNext() {
+  const next = queue.shift();
+  queue.push(createPiece());
+  drawNextQueue();
+  return next;
+}
+
+// ─── Lock & line clear ────────────────────────────────────────────────────────
+
+function lockPiece() {
+  for (let row = 0; row < currentPiece.shape.length; row++) {
+    for (let col = 0; col < currentPiece.shape[row].length; col++) {
+      if (!currentPiece.shape[row][col]) continue;
+      const by = currentPiece.y + row;
+      const bx = currentPiece.x + col;
+      if (by < 0) { endGame(); return; }
+      board[by][bx] = currentPiece.color;
+    }
+  }
+
+  let linesCleared = 0;
+  for (let row = ROWS - 1; row >= 0; row--) {
+    if (board[row].every(cell => cell !== null)) {
+      board.splice(row, 1);
+      board.unshift(Array(COLS).fill(null));
+      linesCleared++;
+      row++;
+    }
+  }
+
+  if (linesCleared > 0) {
+    volume = Math.min(100, volume + linesCleared);
+    updateVolumeUI();
+  }
+
+  currentPiece = dequeueNext();
+  if (!isValidPosition(currentPiece.shape, currentPiece.x, currentPiece.y)) {
+    endGame();
+  }
+}
+
+// ─── Volume UI ────────────────────────────────────────────────────────────────
+
+function updateVolumeUI() {
+  const audio = document.getElementById('audio-player');
+  if (audio.src && audio.src !== location.href) {
+    audio.volume = volume / 100;
+  }
+
+  const activeBars = Math.round((volume / 100) * VOL_BAR_COUNT);
+  volBarEls.forEach((bar, i) => {
+    bar.classList.toggle('active', i < activeBars);
+  });
+
+  document.getElementById('vol-label').textContent = `${volume} / 100`;
+}
+
+// ─── Drawing ──────────────────────────────────────────────────────────────────
+
+function drawCell(ctx, col, row, color, cellSize) {
+  ctx.fillStyle = color;
+  ctx.fillRect(col * cellSize + 1, row * cellSize + 1, cellSize - 2, cellSize - 2);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(col * cellSize + 2, row * cellSize + 2, cellSize - 4, 2);
+  ctx.fillRect(col * cellSize + 2, row * cellSize + 2, 2, cellSize - 4);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(col * cellSize + 1, row * cellSize + cellSize - 3, cellSize - 2, 2);
+  ctx.fillRect(col * cellSize + cellSize - 3, row * cellSize + 1, 2, cellSize - 2);
+}
+
+function drawBoard() {
+  boardCtx.fillStyle = '#111';
+  boardCtx.fillRect(0, 0, boardCanvas.width, boardCanvas.height);
+
+  boardCtx.strokeStyle = '#1a1a1a';
+  boardCtx.lineWidth = 0.5;
+  for (let row = 0; row <= ROWS; row++) {
+    boardCtx.beginPath();
+    boardCtx.moveTo(0, row * CELL_SIZE);
+    boardCtx.lineTo(boardCanvas.width, row * CELL_SIZE);
+    boardCtx.stroke();
+  }
+  for (let col = 0; col <= COLS; col++) {
+    boardCtx.beginPath();
+    boardCtx.moveTo(col * CELL_SIZE, 0);
+    boardCtx.lineTo(col * CELL_SIZE, boardCanvas.height);
+    boardCtx.stroke();
+  }
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      if (board[row][col]) {
+        drawCell(boardCtx, col, row, board[row][col], CELL_SIZE);
+      }
+    }
+  }
+
+  if (!currentPiece) return;
+
+  // Ghost piece
+  let ghostY = currentPiece.y;
+  while (isValidPosition(currentPiece.shape, currentPiece.x, ghostY + 1)) ghostY++;
+  for (let row = 0; row < currentPiece.shape.length; row++) {
+    for (let col = 0; col < currentPiece.shape[row].length; col++) {
+      if (!currentPiece.shape[row][col]) continue;
+      boardCtx.fillStyle = 'rgba(255,255,255,0.07)';
+      boardCtx.fillRect(
+        (currentPiece.x + col) * CELL_SIZE + 1,
+        (ghostY + row) * CELL_SIZE + 1,
+        CELL_SIZE - 2, CELL_SIZE - 2
+      );
+    }
+  }
+
+  // Active piece
+  for (let row = 0; row < currentPiece.shape.length; row++) {
+    for (let col = 0; col < currentPiece.shape[row].length; col++) {
+      if (currentPiece.shape[row][col]) {
+        drawCell(boardCtx, currentPiece.x + col, currentPiece.y + row, currentPiece.color, CELL_SIZE);
+      }
+    }
+  }
+}
+
+function drawNextQueue() {
+  nextCanvases.forEach((canvas, i) => {
+    const ctx = canvas.getContext('2d');
+    const piece = queue[i];
+    ctx.fillStyle = '#161616';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!piece) return;
+    const offsetX = Math.floor((canvas.width / NEXT_CELL_SIZE - piece.shape[0].length) / 2);
+    const offsetY = Math.floor((canvas.height / NEXT_CELL_SIZE - piece.shape.length) / 2);
+    for (let row = 0; row < piece.shape.length; row++) {
+      for (let col = 0; col < piece.shape[row].length; col++) {
+        if (piece.shape[row][col]) {
+          drawCell(ctx, offsetX + col, offsetY + row, piece.color, NEXT_CELL_SIZE);
+        }
+      }
+    }
+  });
+}
+
+// ─── Movement ─────────────────────────────────────────────────────────────────
+
+function moveLeft() {
+  if (!isRunning || isPaused) return;
+  if (isValidPosition(currentPiece.shape, currentPiece.x - 1, currentPiece.y)) currentPiece.x--;
+}
+
+function moveRight() {
+  if (!isRunning || isPaused) return;
+  if (isValidPosition(currentPiece.shape, currentPiece.x + 1, currentPiece.y)) currentPiece.x++;
+}
+
+function rotate() {
+  if (!isRunning || isPaused) return;
+  const rotated = rotatePiece(currentPiece.shape);
+  if (isValidPosition(rotated, currentPiece.x, currentPiece.y)) {
+    currentPiece.shape = rotated;
+  } else if (isValidPosition(rotated, currentPiece.x - 1, currentPiece.y)) {
+    currentPiece.shape = rotated; currentPiece.x--;
+  } else if (isValidPosition(rotated, currentPiece.x + 1, currentPiece.y)) {
+    currentPiece.shape = rotated; currentPiece.x++;
+  }
+}
+
+function softDrop() {
+  if (!isRunning || isPaused) return;
+  if (isValidPosition(currentPiece.shape, currentPiece.x, currentPiece.y + 1)) {
+    currentPiece.y++;
+  } else {
+    lockPiece();
+  }
+  dropAccumulator = 0;
+}
+
+function hardDrop() {
+  if (!isRunning || isPaused) return;
+  while (isValidPosition(currentPiece.shape, currentPiece.x, currentPiece.y + 1)) currentPiece.y++;
+  lockPiece();
+}
+
+function processDAS(deltaTime) {
+  if (holdingLeft) {
+    dasLeftTimer += deltaTime;
+    if (dasLeftTimer > DAS_DELAY) {
+      const steps = Math.floor((dasLeftTimer - DAS_DELAY) / DAS_REPEAT);
+      const prevSteps = Math.floor((Math.max(0, dasLeftTimer - deltaTime) - DAS_DELAY) / DAS_REPEAT);
+      for (let i = 0; i < steps - prevSteps; i++) moveLeft();
+    }
+  }
+  if (holdingRight) {
+    dasRightTimer += deltaTime;
+    if (dasRightTimer > DAS_DELAY) {
+      const steps = Math.floor((dasRightTimer - DAS_DELAY) / DAS_REPEAT);
+      const prevSteps = Math.floor((Math.max(0, dasRightTimer - deltaTime) - DAS_DELAY) / DAS_REPEAT);
+      for (let i = 0; i < steps - prevSteps; i++) moveRight();
+    }
+  }
+}
+
+// ─── Game loop ────────────────────────────────────────────────────────────────
+
+function gameLoop(timestamp) {
+  if (!isRunning) return;
+  const deltaTime = timestamp - lastTimestamp;
+  lastTimestamp = timestamp;
+
+  if (!isPaused) {
+    dropAccumulator += deltaTime;
+    if (dropAccumulator >= DROP_INTERVAL) {
+      if (isValidPosition(currentPiece.shape, currentPiece.x, currentPiece.y + 1)) {
+        currentPiece.y++;
+      } else {
+        lockPiece();
+      }
+      dropAccumulator = 0;
+    }
+    processDAS(deltaTime);
+    drawBoard();
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+  board = createEmptyBoard();
+  volume = 0;
+  dropAccumulator = 0;
+  initQueue();
+  currentPiece = dequeueNext();
+  isRunning = true;
+  isPaused = false;
+  lastTimestamp = performance.now();
+  updateVolumeUI();
+  document.getElementById('msg').textContent = '';
+  const audio = document.getElementById('audio-player');
+  if (audio.src && audio.src !== location.href) audio.play().catch(() => {});
+  requestAnimationFrame(gameLoop);
+}
+
+function endGame() {
+  isRunning = false;
+  document.getElementById('msg').textContent = 'game over';
+  document.getElementById('audio-player').pause();
+}
+
+function togglePause() {
+  if (!isRunning) { startGame(); return; }
+  isPaused = !isPaused;
+  if (!isPaused) lastTimestamp = performance.now();
+  document.getElementById('msg').textContent = isPaused ? 'paused' : '';
+}
+
+// ─── Keyboard input ───────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', e => {
+  if (!isRunning) {
+    if (e.code === 'Space') { e.preventDefault(); startGame(); }
+    return;
+  }
+  if (e.code === 'KeyP') { togglePause(); return; }
+  if (isPaused) return;
+
+  switch (e.code) {
+    case 'ArrowLeft':
+      e.preventDefault();
+      if (!holdingLeft) { holdingLeft = true; dasLeftTimer = 0; moveLeft(); }
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (!holdingRight) { holdingRight = true; dasRightTimer = 0; moveRight(); }
+      break;
+    case 'ArrowDown':  e.preventDefault(); softDrop(); break;
+    case 'ArrowUp':    e.preventDefault(); rotate(); break;
+    case 'Space':      e.preventDefault(); hardDrop(); break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowLeft')  { holdingLeft = false;  dasLeftTimer = 0; }
+  if (e.code === 'ArrowRight') { holdingRight = false; dasRightTimer = 0; }
+});
+
+// ─── Touch controls ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-start').addEventListener('click', togglePause);
+document.getElementById('btn-drop').addEventListener('click', hardDrop);
+document.getElementById('btn-rotate').addEventListener('click', rotate);
+document.getElementById('btn-down').addEventListener('click', softDrop);
+
+// Left / right buttons support holding for DAS on touch
+function startHoldLeft() { if (!holdingLeft) { holdingLeft = true; dasLeftTimer = 0; moveLeft(); } }
+function startHoldRight() { if (!holdingRight) { holdingRight = true; dasRightTimer = 0; moveRight(); } }
+function stopHoldLeft() { holdingLeft = false; dasLeftTimer = 0; }
+function stopHoldRight() { holdingRight = false; dasRightTimer = 0; }
+
+document.getElementById('btn-left').addEventListener('touchstart', e => { e.preventDefault(); startHoldLeft(); }, { passive: false });
+document.getElementById('btn-left').addEventListener('touchend', e => { e.preventDefault(); stopHoldLeft(); }, { passive: false });
+document.getElementById('btn-right').addEventListener('touchstart', e => { e.preventDefault(); startHoldRight(); }, { passive: false });
+document.getElementById('btn-right').addEventListener('touchend', e => { e.preventDefault(); stopHoldRight(); }, { passive: false });
+
+// Fallback click for non-touch
+document.getElementById('btn-left').addEventListener('click', moveLeft);
+document.getElementById('btn-right').addEventListener('click', moveRight);
+
+// ─── Swipe gestures on board ──────────────────────────────────────────────────
+
+let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+
+boardCanvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+  touchStartTime = Date.now();
+}, { passive: false });
+
+boardCanvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  const dt = Date.now() - touchStartTime;
+  const absDx = Math.abs(dx), absDy = Math.abs(dy);
+
+  // Tap = rotate
+  if (absDx < 10 && absDy < 10 && dt < 250) { rotate(); return; }
+
+  // Swipe down = hard drop
+  if (absDy > absDx && dy > 40) { hardDrop(); return; }
+
+  // Swipe left/right = move
+  if (absDx > absDy && absDx > 20) {
+    dx < 0 ? moveLeft() : moveRight();
+  }
+}, { passive: false });
+
+// ─── Audio ────────────────────────────────────────────────────────────────────
+
+document.getElementById('audio-file').addEventListener('change', function () {
+  const file = this.files[0];
+  if (!file) return;
+  const audio = document.getElementById('audio-player');
+  audio.src = URL.createObjectURL(file);
+  audio.volume = volume / 100;
+  document.getElementById('audio-name').textContent = file.name;
+  if (isRunning && !isPaused) audio.play().catch(() => {});
+});
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+board = createEmptyBoard();
+drawBoard();
+</script>
+</body>
+</html>
